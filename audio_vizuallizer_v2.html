@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudioViz v2</title>
+    <style>
+        :root {
+            --bg-color: #030303;
+            --panel-bg: rgba(5, 5, 5, 0.7);
+            --accent: #d60026; /* Default Crimson */
+            --accent-hover: #ff002f;
+            --text-main: #cccccc;
+            --text-muted: #555555;
+            --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        }
+
+        body, html { margin: 0; padding: 0; background: var(--bg-color); overflow: hidden; font-family: var(--font-stack); }
+
+        canvas {
+            display: block; width: 100vw; height: 100vh;
+            transition: filter 0.05s ease-out; transform-origin: center center;
+            will-change: transform, filter;
+        }
+
+        .canvas-invert { filter: invert(1) hue-rotate(180deg); }
+        .canvas-glitch { filter: contrast(1.8) saturate(2.5) brightness(1.2); }
+        .canvas-transition { filter: contrast(3) blur(4px) grayscale(1); transform: scale(1.08); }
+
+        #ui {
+            position: absolute; z-index: 10; top: 20px; left: 20px;
+            background: var(--panel-bg); padding: 20px;
+            color: var(--text-main); width: 280px;
+            backdrop-filter: blur(10px); border-radius: 6px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5); border: 1px solid rgba(255,255,255,0.05);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        #ui.hidden { opacity: 0; pointer-events: none; transform: translateY(-10px) scale(0.98); }
+
+        h2 { margin: 0 0 12px 0; color: #fff; font-size: 13px; letter-spacing: 2px; font-weight: 700; text-transform: uppercase; }
+        
+        .sys-info { font-family: var(--font-mono); font-size: 9px; color: var(--accent); margin-bottom: 20px; letter-spacing: 1px;}
+
+        .btn {
+            display: block; width: 100%; background: transparent; color: #fff;
+            border: 1px solid var(--text-muted); padding: 10px;
+            font-size: 10px; font-weight: 600; cursor: pointer; text-transform: uppercase;
+            letter-spacing: 1px; margin-bottom: 8px; transition: all 0.2s; box-sizing: border-box; border-radius: 3px;
+        }
+        .btn:hover { border-color: var(--accent); background: rgba(255,255,255,0.05); color: var(--accent); }
+        input[type="file"] { display: none; }
+
+        .row { display: flex; justify-content: space-between; align-items: center; margin: 15px 0 10px 0; }
+        .label { font-size: 9px; font-family: var(--font-mono); color: var(--text-muted); }
+
+        .theme-buttons { display: flex; gap: 6px; }
+        .theme-btn { width: 14px; height: 14px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: 0.2s; }
+        .theme-btn:hover { transform: scale(1.2); }
+        .theme-btn.active { border-color: #fff; transform: scale(1.1); box-shadow: 0 0 10px currentColor; }
+        .theme-raw { background: #d60026; color: #d60026; }
+        .theme-cyber { background: #00e5ff; color: #00e5ff; }
+        .theme-toxic { background: #39ff14; color: #39ff14; }
+
+        .data-feed { margin-top: 15px; font-family: var(--font-mono); font-size: 10px; line-height: 1.6; }
+        .data-feed span { color: #fff; float: right; font-weight: bold; }
+
+        .hotkeys {
+            margin-top: 20px; display: flex; flex-wrap: wrap; gap: 6px;
+            font-size: 8px; font-family: var(--font-mono); color: var(--text-muted); border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px;
+        }
+        kbd {
+            background: #222; color: #fff; padding: 3px 5px; border-radius: 2px;
+            border-bottom: 1px solid #000; font-family: var(--font-stack); font-weight: bold; margin-right: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <h2>Protocol Node</h2>
+        <div class="sys-info" id="status-val">SYSTEM STANDBY</div>
+        
+        <button class="btn" id="btn-system">Capture System Audio</button>
+        <label for="file-upload" class="btn">Load Audio File</label>
+        <input type="file" id="file-upload" accept="audio/*">
+        
+        <div class="row">
+            <div class="label">COLOR OVERRIDE</div>
+            <div class="theme-buttons">
+                <div class="theme-btn theme-raw active" data-theme="raw"></div>
+                <div class="theme-btn theme-cyber" data-theme="cyber"></div>
+                <div class="theme-btn theme-toxic" data-theme="toxic"></div>
+            </div>
+        </div>
+
+        <div class="data-feed">
+            <div>MODE: <span id="vis-mode">0. VORTEX</span></div>
+            <div>STATE: <span id="vibe-phase" style="color:var(--text-muted);">AWAITING SIGNAL</span></div>
+            <div>ENERGY: <span id="energy-level">0 UNIT</span></div>
+        </div>
+
+        <div class="hotkeys">
+            <div><kbd>H</kbd>UI</div>
+            <div><kbd>F</kbd>FULLSCREEN</div>
+            <div><kbd>→</kbd>SWITCH MODE</div>
+        </div>
+
+        <audio id="audio-player" style="display:none;"></audio>
+    </div>
+
+    <canvas id="visualizer"></canvas>
+
+    <script>
+        // === 1. GLOBAL VARS ===
+        let accentColor = '#d60026', accentRgb = '214, 0, 38';
+
+        const canvas = document.getElementById("visualizer");
+        const ctx = canvas.getContext("2d", { alpha: false }); 
+        
+        let cw, ch, cx, cy, fov;
+        function resize() {
+            cw = canvas.width = window.innerWidth;
+            ch = canvas.height = window.innerHeight;
+            cx = cw / 2; cy = ch / 2; fov = Math.min(cw, ch) * 0.8;
+        }
+        window.addEventListener('resize', resize); resize();
+
+        let audioCtx, analyser, freqArray, waveArray; 
+        let isPlaying = false;
+        let globalTime = 0;
+        
+        let currentMode = 0; // 0 to 4
+        const MODE_NAMES = ["0. VORTEX CORE", "1. CYBER TRENCH", "2. NEURAL RADAR", "3. PLASMA SYMBIOTE", "4. VOID ECLIPSE"];
+        
+        let energyHistory = new Float32Array(100), historyIndex = 0;
+        let phase = 0, beatCutoff = 0, beatCooldown = 0, flashOpacity = 0;
+        let silenceTimer = 0, modeCooldown = 120;
+
+        // === 2. EVENT LISTENERS & UI ===
+        document.querySelectorAll('.theme-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                let t = e.target.dataset.theme;
+                if(t==='raw'){accentColor='#d60026'; accentRgb='214, 0, 38';}
+                if(t==='cyber'){accentColor='#00e5ff'; accentRgb='0, 229, 255';}
+                if(t==='toxic'){accentColor='#39ff14'; accentRgb='57, 255, 20';}
+                document.documentElement.style.setProperty('--accent', accentColor);
+            });
+        });
+
+        window.addEventListener('keydown', (e) => {
+            let key = e.key.toLowerCase();
+            if (key === 'h') document.getElementById('ui').classList.toggle('hidden');
+            if (key === 'f') toggleFullscreen();
+            if (e.key === 'ArrowRight' && modeCooldown <= 0 && isPlaying) triggerModeSwitch();
+        });
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+            else if (document.exitFullscreen) document.exitFullscreen();
+        }
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
+                freqArray = new Uint8Array(analyser.frequencyBinCount);
+                waveArray = new Uint8Array(analyser.frequencyBinCount);
+                analyser.smoothingTimeConstant = 0.55; 
+            }
+        }
+
+        function triggerModeSwitch() {
+            currentMode = (currentMode + 1) % 5;
+            document.getElementById('vis-mode').innerText = MODE_NAMES[currentMode];
+            modeCooldown = 40; silenceTimer = 0; flashOpacity = 1.0; 
+            
+            canvas.classList.add("canvas-transition");
+            setTimeout(() => canvas.classList.remove("canvas-transition"), 150);
+        }
+
+        ['file-upload'].forEach(id => {
+            document.getElementById(id).addEventListener('change', e => {
+                let file = e.target.files[0]; if(!file) return;
+                initAudio();
+                let ap = document.getElementById('audio-player'); ap.src = URL.createObjectURL(file); ap.play();
+                if(!window.aSrc) { let s = audioCtx.createMediaElementSource(ap); s.connect(analyser); analyser.connect(audioCtx.destination); window.aSrc = true; }
+                startEngine();
+            });
+        });
+
+        document.getElementById('btn-system').addEventListener('click', async () => {
+            try {
+                initAudio();
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                if(stream.getAudioTracks().length === 0) return alert("System Audio required.");
+                const s = audioCtx.createMediaStreamSource(stream); s.connect(analyser); startEngine();
+            } catch (err) {}
+        });
+
+        function startEngine() {
+            isPlaying = true; if(audioCtx.state === 'suspended') audioCtx.resume();
+            document.getElementById('status-val').innerText = "LINK ESTABLISHED // ONLINE";
+        }
+
+        // === 3. CORE ANALYTICS ===
+        function processAudio() {
+            if(!analyser) return { bass: 0, mids: 0, highs: 0, avgE: 0 };
+            analyser.getByteFrequencyData(freqArray); analyser.getByteTimeDomainData(waveArray);
+
+            let bass = 0; for(let i=1; i<6; i++) bass += freqArray[i]; bass /= 5;
+            let mids = 0; for(let i=20; i<80; i++) mids += freqArray[i]; mids /= 60;
+            let highs= 0; for(let i=120; i<300; i++) highs += freqArray[i]; highs /= 180;
+            
+            let energy = (bass * 1.5 + mids) * 0.5;
+            energyHistory[historyIndex] = energy; historyIndex = (historyIndex + 1) % 100;
+            let avgE = 0; for(let i=0; i<100; i++) avgE += energyHistory[i]; avgE /= 100;
+
+            if(avgE < 25) phase = 0; else if(avgE < 95) phase = 1; else phase = 2;
+
+            if(globalTime % 6 === 0) {
+                document.getElementById('vibe-phase').innerText = phase === 0 ? "AMBIENT" : (phase === 1 ? "BUILD-UP" : "RAMPAGE");
+                document.getElementById('vibe-phase').style.color = phase === 2 ? accentColor : "#fff";
+                document.getElementById('energy-level').innerText = Math.round(avgE) + " UNIT";
+            }
+
+            if(avgE < 6) silenceTimer++; else silenceTimer = 0;
+            if(modeCooldown > 0) modeCooldown--;
+            if(silenceTimer > 30 && modeCooldown <= 0) triggerModeSwitch();
+
+            beatCutoff *= 0.93; if(beatCutoff < 100) beatCutoff = 100;
+            if (beatCooldown > 0) beatCooldown--;
+            if (bass > beatCutoff && bass > 185 && beatCooldown <= 0) {
+                triggerBeat(bass); beatCutoff = bass * 1.15; beatCooldown = 12;
+            }
+            return { bass, mids, highs, avgE };
+        }
+
+        function triggerBeat(pow) {
+            if (phase === 2) {
+                let s = (pow - 180) * 0.15;
+                canvas.style.transform = `translate(${(Math.random()-0.5)*s}px, ${(Math.random()-0.5)*s}px) scale(1.02)`;
+                if (Math.random() > 0.92) { canvas.classList.add("canvas-invert"); setTimeout(() => canvas.classList.remove("canvas-invert"), 100); }
+            }
+            if(currentMode === 0) VORTEX_API.onBeat(pow);
+            if(currentMode === 3) PLASMA_API.onBeat(pow);
+            if(currentMode === 4) VOID_API.onBeat(pow);
+        }
+
+        // === 4. ENGINES ===
+        const GeoCache = {};
+        [{n:'HEXAGON', p:6, r:1}, {n:'TRIANGLE', p:3, r:1}, {n:'DIAMOND', p:4, r:1}].forEach(t=>{
+            GeoCache[t.n]=[]; for(let i=0; i<t.p; i++){ GeoCache[t.n].push({x:Math.cos((Math.PI*2/t.p)*i), y:Math.sin((Math.PI*2/t.p)*i)}); }
+        });
+
+        const VORTEX_API = {
+            particles: Array.from({length: 200}, () => ({x:(Math.random()-0.5)*5000, y:(Math.random()-0.5)*5000, z:Math.random()*3000+100, pz:3000})),
+            shapes: [], coreRot: 0,
+            onBeat: function(pow) {
+                if(this.shapes.length>5) this.shapes.shift();
+                this.shapes.push({t:['HEXAGON','TRIANGLE','DIAMOND'][Math.floor(Math.random()*3)], z:2500, r:Math.random()*Math.PI, rs:(Math.random()-0.5)*0.1});
+                if(pow>240) flashOpacity = 0.4;
+            },
+            draw: function(ctx, bass, mids, avgE) {
+                let sp = phase===0?-0.5:(phase===1?4:14+(bass*0.05)); ctx.translate(cx, cy);
+                for(let p of this.particles){
+                    p.pz=p.z; p.z-=sp; if(p.z<10){p.x=(Math.random()-0.5)*5000; p.y=(Math.random()-0.5)*5000; p.z=3000;} else if(p.z>3000&&sp<0) p.z=10;
+                    if(p.z<1) continue;
+                    ctx.beginPath(); ctx.moveTo(p.x*(fov/p.pz), p.y*(fov/p.pz)); ctx.lineTo(p.x*(fov/p.z), p.y*(fov/p.z));
+                    ctx.strokeStyle=(p.x%2>0)?'#444':accentColor; ctx.lineWidth=Math.max(0.5,3-(p.z/1000)); ctx.stroke();
+                }
+                for(let i=this.shapes.length-1; i>=0; i--){
+                    let s=this.shapes[i]; s.z-=sp*2.2; s.r+=s.rs; if(s.z<10){this.shapes.splice(i,1); continue;}
+                    let dr=450*(fov/s.z); ctx.save(); ctx.globalAlpha=Math.min(1,s.z/200); ctx.strokeStyle=accentColor; ctx.lineWidth=Math.min(6,400/s.z); ctx.rotate(s.r);
+                    ctx.beginPath(); GeoCache[s.t].forEach((v,k)=>{k===0?ctx.moveTo(v.x*dr,v.y*dr):ctx.lineTo(v.x*dr,v.y*dr);}); ctx.closePath(); ctx.stroke(); ctx.restore();
+                }
+                this.coreRot += phase===2?0.02:0.005; ctx.rotate(this.coreRot); ctx.scale(1+(bass/400), 1+(bass/400));
+                ctx.strokeStyle=accentColor; ctx.lineWidth=2; ctx.beginPath();
+                for(let i=0; i<8; i++){
+                    ctx.rotate(Math.PI/4); ctx.moveTo(0,0);
+                    for(let j=1; j<12; j++) ctx.lineTo(j*15, (phase===0?0.1:0.5) * (freqArray[j*4]||0) * Math.sin(j+globalTime*0.2));
+                } ctx.stroke();
+                ctx.fillStyle='#050505'; ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.arc(0,0,20+(bass*0.15),0,Math.PI*2); ctx.fill(); ctx.stroke();
+                ctx.resetTransform();
+            }
+        };
+
+        const TRENCH_API = {
+            gz: Array.from({length:30}, (_,i)=>i*100),
+            draw: function(ctx, bass, mids) {
+                let yo=ch*0.65; ctx.translate(cx, yo-150-(bass*0.2));
+                let sr=120+(mids*0.4); ctx.shadowBlur=40; ctx.shadowColor=accentColor; ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(0,0,sr,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
+                ctx.beginPath();
+                for(let i=0; i<180; i++){
+                    let a=(i/180)*Math.PI*2, r=sr+((waveArray[i*5]/128.0-1)*(50+bass*0.5));
+                    i===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+                } ctx.closePath(); ctx.strokeStyle=accentColor; ctx.lineWidth=3; ctx.stroke();
+                
+                ctx.resetTransform(); ctx.translate(cx, yo);
+                let xSeg=26, segW=150, sp=phase===2?18:5; ctx.strokeStyle=accentColor; ctx.lineWidth=1;
+                for(let i=0; i<this.gz.length; i++){
+                    this.gz[i]-=sp; if(this.gz[i]<10) this.gz[i]=3000;
+                    let z=this.gz[i], sc=fov/z; ctx.globalAlpha=Math.min(1,(3000-z)/1500); ctx.beginPath();
+                    for(let x=-xSeg/2; x<=xSeg/2; x++) {
+                        let vy=(150-(freqArray[Math.abs(x)*4+(i%5)*2]||0)*1.5)*sc;
+                        x===-xSeg/2?ctx.moveTo((x*segW)*sc,vy):ctx.lineTo((x*segW)*sc,vy);
+                    } ctx.stroke();
+                } ctx.globalAlpha=0.2; ctx.strokeStyle='#fff'; ctx.beginPath();
+                for(let x=-xSeg/2; x<=xSeg/2; x++){ let xp=x*segW; ctx.moveTo(xp*(fov/3000), 150*(fov/3000)); ctx.lineTo(xp*(fov/50), 150*(fov/50)); } ctx.stroke();
+                ctx.resetTransform();
+            }
+        };
+
+        const RADAR_API = {
+            rot: 0,
+            draw: function(ctx, bass, mids) {
+                ctx.translate(cx,cy); this.rot-=phase===2?0.02:0.003; ctx.rotate(this.rot);
+                ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0, Math.max(cw,ch)); ctx.strokeStyle=accentColor; ctx.lineWidth=2; ctx.stroke();
+                for(let i=1; i<=7; i++){
+                    let r=(i*60)+bass*(i*0.08), pts=64+(i*12), fb=i*30; ctx.beginPath();
+                    for(let p=0; p<pts; p++){
+                        let fr=freqArray[fb+Math.floor(p/2)]||0, a=(p/pts)*Math.PI*2;
+                        if(fr>220 && p%8===0) continue;
+                        let er = r+(fr*(0.1+i*0.08)); p===0?ctx.moveTo(Math.cos(a)*er,Math.sin(a)*er):ctx.lineTo(Math.cos(a)*er,Math.sin(a)*er);
+                    } ctx.closePath(); ctx.strokeStyle=i%2===0?'#fff':accentColor; ctx.lineWidth=phase===2?3:1.5; ctx.stroke();
+                }
+                ctx.beginPath(); ctx.arc(0,0,10+(mids*0.2),0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.resetTransform();
+            }
+        };
+
+        // NEW MODE 3: PLASMA SYMBIOTE (Organic, fluid blob with jagged rawstyle edges)
+        const PLASMA_API = {
+            rot: 0, shock: 0,
+            onBeat: function(pow) { this.shock = pow / 255; },
+            drawBlob: function(ctx, baseRad, color, isFill, speedMult, bass) {
+                ctx.beginPath();
+                let steps = 120;
+                for(let i=0; i<steps; i++) {
+                    let a = (i/steps)*Math.PI*2;
+                    let freqVal = freqArray[i % 40] / 255; 
+                    // Organic writhing
+                    let writhe = Math.sin((globalTime*0.05*speedMult) + i) * 15;
+                    // Sharp spikes on Screech/Mids (harder when bass is hitting)
+                    let spikes = freqVal * (30 + (this.shock*150));
+                    let r = baseRad + writhe + spikes;
+                    let vx = Math.cos(a)*r, vy = Math.sin(a)*r;
+                    i===0 ? ctx.moveTo(vx,vy) : ctx.lineTo(vx,vy);
+                }
+                ctx.closePath();
+                if(isFill) { ctx.fillStyle = color; ctx.fill(); }
+                else { ctx.strokeStyle = color; ctx.lineWidth=4; ctx.stroke(); }
+            },
+            draw: function(ctx, bass, mids) {
+                ctx.translate(cx, cy); this.rot += 0.005; ctx.rotate(this.rot);
+                this.shock *= 0.85; // smooth decay
+                
+                let scale = 1 + (bass/500); ctx.scale(scale, scale);
+
+                // Layer 1 (Dark core)
+                this.drawBlob(ctx, 120, '#050505', true, 0.8, bass);
+                // Layer 2 (Colored neon)
+                this.drawBlob(ctx, 120, accentColor, false, 1.0, bass);
+                // Layer 3 (Inner white energy)
+                this.drawBlob(ctx, 80 + this.shock*40, '#ffffff', true, -1.2, bass);
+                // Layer 4 (Chaotic inner red lines)
+                this.drawBlob(ctx, 60, accentColor, false, 2.5, bass);
+
+                ctx.resetTransform();
+            }
+        };
+
+        // NEW MODE 4: VOID ECLIPSE (Black hole with outward fiery rays & expanding shockwaves)
+        const VOID_API = {
+            shockwaves: [],
+            onBeat: function(pow) {
+                this.shockwaves.push({ r: 50, a: 1.0, w: 15 });
+                if(pow > 240) flashOpacity = 0.5;
+            },
+            draw: function(ctx, bass, mids) {
+                ctx.translate(cx, cy);
+                
+                // Shockwaves
+                for(let i=this.shockwaves.length-1; i>=0; i--) {
+                    let s = this.shockwaves[i];
+                    s.r += phase===2 ? 40 : 15; s.a *= 0.92; s.w *= 0.95;
+                    ctx.beginPath(); ctx.arc(0,0,s.r, 0, Math.PI*2);
+                    ctx.strokeStyle = `rgba(${accentRgb}, ${s.a})`; ctx.lineWidth = s.w; ctx.stroke();
+                    if(s.a < 0.02) this.shockwaves.splice(i, 1);
+                }
+
+                // Solar Flares (Curving rays based on audio)
+                let numRays = 180;
+                let holeRadius = 150 + (bass * 0.3); // Core expanding with sub
+
+                ctx.globalCompositeOperation = 'lighter';
+                for(let i=0; i<numRays; i++) {
+                    let freqVal = freqArray[Math.floor(i * 1.5)] || 0; // high freq binding
+                    if (freqVal < 20) continue; // Noise floor
+                    
+                    let a = (i/numRays) * Math.PI*2;
+                    let len = (freqVal * 1.5) + (phase===2 ? 100 : 0);
+                    
+                    // Bezier bending logic for twisting flares
+                    let cpOffset = Math.sin(globalTime*0.02 + i) * 100;
+                    
+                    let sx = Math.cos(a)*holeRadius; 
+                    let sy = Math.sin(a)*holeRadius;
+                    
+                    let cx1 = Math.cos(a + 0.5)*(holeRadius + len/2) + cpOffset;
+                    let cy1 = Math.sin(a + 0.5)*(holeRadius + len/2) + cpOffset;
+                    
+                    let ex = Math.cos(a)* (holeRadius + len);
+                    let ey = Math.sin(a)* (holeRadius + len);
+
+                    ctx.beginPath(); ctx.moveTo(sx, sy);
+                    ctx.quadraticCurveTo(cx1, cy1, ex, ey);
+                    
+                    // Color mix depending on frequency height
+                    ctx.strokeStyle = freqVal > 200 ? '#ffffff' : accentColor;
+                    ctx.lineWidth = freqVal > 220 ? 3 : 1;
+                    ctx.globalAlpha = freqVal / 255;
+                    ctx.stroke();
+                }
+                ctx.globalCompositeOperation = 'source-over';
+                
+                // Pure Black Void in center
+                ctx.beginPath(); ctx.arc(0,0, holeRadius - 2, 0, Math.PI*2);
+                ctx.fillStyle = '#020202'; ctx.fill();
+                ctx.lineWidth = 4; ctx.strokeStyle = accentColor; ctx.stroke();
+
+                ctx.resetTransform();
+            }
+        };
+
+        // === 5. MASTER RENDER PIPELINE ===
+        function render() {
+            requestAnimationFrame(render);
+            globalTime++;
+
+            let { bass, mids, highs, avgE } = processAudio();
+            ctx.fillStyle = `rgba(3, 3, 3, ${phase===2 ? 0.4 : 0.15})`;
+            ctx.fillRect(0, 0, cw, ch);
+
+            if (!isPlaying) return;
+            if (!(phase===2 && bass>200)) canvas.style.transform = "translate(0, 0) scale(1)";
+
+            // Engine Routing
+            if(currentMode===0) VORTEX_API.draw(ctx, bass, mids, avgE);
+            if(currentMode===1) TRENCH_API.draw(ctx, bass, mids, avgE);
+            if(currentMode===2) RADAR_API.draw(ctx, bass, mids, avgE);
+            if(currentMode===3) PLASMA_API.draw(ctx, bass, mids);
+            if(currentMode===4) VOID_API.draw(ctx, bass, mids);
+
+            if(flashOpacity > 0.01) { ctx.fillStyle = `rgba(${accentRgb}, ${flashOpacity})`; ctx.fillRect(0, 0, cw, ch); flashOpacity *= 0.85; }
+        }
+        render();
+    </script>
+</body>
+</html>

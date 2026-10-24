@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AudioViz v3 - 3D Spiral</title>
+    <title>AudioViz v4 - Ultimate</title>
     <style>
         :root {
             --bg-color: #030303;
@@ -131,16 +131,24 @@
         let isPlaying = false;
         let globalTime = 0;
         
-        let currentMode = 3; // Starte direkt im neuen Modus zum Testen
-        const MODE_NAMES = ["0. VORTEX CORE", "1. CYBER TRENCH", "2. NEURAL RADAR", "3. 3D CYBER SPIRAL", "4. VOID ECLIPSE"];
+        // Starte direkt im neuen Modus 5 (Liquid Glass), 3 (Spiral) ist gefixt.
+        let currentMode = 5; 
+        const MODE_NAMES = [
+            "0. VORTEX CORE", 
+            "1. CYBER TRENCH", 
+            "2. NEURAL RADAR", 
+            "3. 3D CYBER SPIRAL", 
+            "4. VOID ECLIPSE", 
+            "5. LIQUID GLASS"
+        ];
         
         let energyHistory = new Float32Array(100), historyIndex = 0;
         let phase = 0, beatCutoff = 0, beatCooldown = 0, flashOpacity = 0;
         let silenceTimer = 0, modeCooldown = 120;
 
-        // UI SETUP
         document.getElementById('vis-mode').innerText = MODE_NAMES[currentMode];
 
+        // === 2. EVENT LISTENERS & UI ===
         document.querySelectorAll('.theme-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
@@ -171,12 +179,12 @@
                 analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
                 freqArray = new Uint8Array(analyser.frequencyBinCount);
                 waveArray = new Uint8Array(analyser.frequencyBinCount);
-                analyser.smoothingTimeConstant = 0.7; // Etwas weicher für flüssige 3D Animation
+                analyser.smoothingTimeConstant = 0.7; 
             }
         }
 
         function triggerModeSwitch() {
-            currentMode = (currentMode + 1) % 5;
+            currentMode = (currentMode + 1) % MODE_NAMES.length;
             document.getElementById('vis-mode').innerText = MODE_NAMES[currentMode];
             modeCooldown = 40; silenceTimer = 0; flashOpacity = 1.0; 
             
@@ -264,7 +272,6 @@
             onBeat: function(pow) {
                 if(this.shapes.length>5) this.shapes.shift();
                 this.shapes.push({t:['HEXAGON','TRIANGLE','DIAMOND'][Math.floor(Math.random()*3)], z:2500, r:Math.random()*Math.PI, rs:(Math.random()-0.5)*0.1});
-                if(pow>240) flashOpacity = 0.4;
             },
             draw: function(ctx, bass, mids, avgE) {
                 let sp = phase===0?-0.5:(phase===1?4:14+(bass*0.05)); ctx.translate(cx, cy);
@@ -333,98 +340,108 @@
             }
         };
 
-        // NEW MODE 3: 3D CYBER SPIRAL (Replaces the "Hair/Symbiote" Mode)
-        // Erzeugt ein 3D Wireframe Terrain, gerollt zu einem Strudel, genau wie auf dem Bild.
+        // GEFIXT: 3D CYBER SPIRAL (Glitches durch Negative Z-Achse entfernt)
         const SPIRAL_API = {
             rot: 0, beatJump: 0,
-            onBeat: function(pow) {
-                this.beatJump = pow * 0.5; // Pusht den Trichter nach vorne bei einem Beat
-            },
+            onBeat: function(pow) { this.beatJump = pow * 0.6; },
             draw: function(ctx, bass, mids) {
-                ctx.translate(cx, cy + 100); // Etwas nach unten schieben wegen 3D-Winkel
+                ctx.translate(cx, cy + 120); 
                 
-                this.rot += phase === 2 ? 0.015 : 0.005;
-                this.beatJump *= 0.85; // Weiches Abklingen des Beat-Jumps
+                this.rot += phase === 2 ? 0.015 : 0.003;
+                this.beatJump *= 0.85; 
                 
-                let rings = 35; // Anzahl der Tiefenringe
-                let pts = 60;   // Punkte pro Ring (für das Netz)
-                let maxRadius = Math.max(cw, ch) * 0.75;
+                let rings = 45; // Mehr Ringe für dichteres Netz
+                let pts = 80;   // Mehr Punkte
+                let maxRadius = Math.max(cw, ch) * 0.9;
                 
-                // Kamera-Winkel (Tilt für den 3D-Look)
-                let tilt = 1.15; // Radians (kippt die Ebene nach hinten)
+                let tilt = 1.3; // Neigungswinkel
                 let cosT = Math.cos(tilt), sinT = Math.sin(tilt);
                 
                 let projectedPoints = [];
+                let cameraZ = 800; // Abstand der Kamera (Verhindert Glitches)
+                let perspective = 900;
 
-                // 1. Koordinaten im 3D Raum berechnen
+                // 1. Punkte berechnen
                 for(let r = 0; r < rings; r++) {
                     let ringProj = [];
-                    // Logarithmisches Mapping der Frequenzen (Innere Ringe = Vocals/Highs, Äußere = Bass)
-                    // So formt die Stimme weiche Hügel und der Bass harte Spitzen
-                    let freqIdx = Math.floor(Math.pow((rings - r) / rings, 1.5) * 80); 
+                    let radiusNorm = r / (rings - 1); 
+                    
+                    // Umkehren: Innen tief, außen hoch (Strudel)
+                    let radius = Math.pow(radiusNorm, 1.2) * maxRadius;
+                    let baseZ = (1 - radiusNorm) * -900; 
+
+                    let freqIdx = Math.floor(Math.pow(1 - radiusNorm, 1.5) * 80); 
                     let amp = freqArray[freqIdx] || 0;
                     
-                    // Radius wird nach innen hin exponentiell kleiner (Strudeleffekt)
-                    let radiusNorm = Math.pow((r + 1) / rings, 1.2);
-                    let radius = radiusNorm * maxRadius;
-                    
-                    // Z-Tiefe (Der Trichter geht nach hinten in den Bildschirm)
-                    let baseZ = (1 - radiusNorm) * -800; 
-
                     for(let p = 0; p < pts; p++) {
-                        let a = (p / pts) * Math.PI * 2 + this.rot + (r * 0.1); // Leichter Twist pro Ring
+                        let a = (p / pts) * Math.PI * 2 + this.rot + (r * 0.08); 
                         
-                        // Terrain generieren (Kombination aus Frequenz und weicher Sinuswelle für Vocals)
-                        let vocalWave = Math.sin(p * 0.5 + globalTime * 0.03) * (mids * 0.5);
-                        let heightZ = (amp * 0.8) + vocalWave;
+                        // Terrain (Vocals + Bass formen die Hügel)
+                        let vocalWave = Math.sin(p * 0.8 + globalTime * 0.03) * (mids * 0.5);
+                        let heightZ = (amp * 0.7) + vocalWave + this.beatJump;
                         
+                        // Loch in der Mitte weich ausblenden
+                        if (r < 4) heightZ *= (r / 4);
+
                         let x = Math.cos(a) * radius;
                         let y = Math.sin(a) * radius;
-                        let z = baseZ + heightZ + this.beatJump;
+                        let z = baseZ + heightZ;
                         
-                        // 3D Rotation um die X-Achse anwenden (Kippen)
+                        // 3D Rotation (Kippen der Z/Y Achsen)
                         let ty = y * cosT - z * sinT;
                         let tz = y * sinT + z * cosT;
                         
-                        // Perspektivische Projektion (FOV)
-                        let perspective = 800;
-                        let scale = perspective / (perspective + tz + 400); // 400 = Kameraabstand
+                        // FIX: Verhindert Division durch 0 oder negative Kamera-Distanz
+                        let zPos = tz + cameraZ;
+                        if (zPos < 10) zPos = 10; 
+                        
+                        let scale = perspective / zPos;
                         
                         ringProj.push({ 
                             x: x * scale, 
                             y: ty * scale, 
-                            amp: amp,
-                            scale: scale 
+                            zPos: zPos, // Zum Filtern von Linien hinter der Kamera
+                            amp: amp
                         });
                     }
                     projectedPoints.push(ringProj);
                 }
                 
-                // 2. Wireframe-Netz zeichnen (Verbindungen zwischen Ringen und Punkten)
-                ctx.globalCompositeOperation = 'lighter'; // Für den leuchtenden Neon-Effekt
-                ctx.lineWidth = 1.2;
+                ctx.globalCompositeOperation = 'lighter'; 
+                ctx.lineWidth = 1.0;
 
-                for(let r = 0; r < rings - 1; r++) {
+                // 2. Horizontale Ringe zeichnen
+                for(let r = 0; r < rings; r++) {
                     ctx.beginPath();
                     for(let p = 0; p < pts; p++) {
-                        let p1 = projectedPoints[r][p];
-                        let p2 = projectedPoints[r][(p + 1) % pts];
-                        let p3 = projectedPoints[r + 1][p];
+                        let pt = projectedPoints[r][p];
+                        if (pt.zPos < 50) continue; // Kamera-Clipping
                         
-                        // Farbe und Transparenz basierend auf Frequenz und Tiefe
-                        let depthAlpha = (r / rings); // Hinten dunkel, vorne hell
-                        let energyColor = p1.amp > 150 ? '#ffffff' : accentColor;
-                        
-                        ctx.strokeStyle = energyColor;
-                        ctx.globalAlpha = Math.max(0.1, depthAlpha * (0.3 + p1.amp/255));
-                        
-                        // Dreieck für das Netz zeichnen
-                        ctx.moveTo(p1.x, p1.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.lineTo(p3.x, p3.y);
+                        if (p === 0) ctx.moveTo(pt.x, pt.y);
+                        else ctx.lineTo(pt.x, pt.y);
                     }
+                    ctx.closePath();
+                    let depthAlpha = 1 - (r / rings);
+                    let basePt = projectedPoints[r][0];
+                    ctx.strokeStyle = basePt.amp > 180 ? '#ffffff' : accentColor;
+                    ctx.globalAlpha = Math.min(1, Math.max(0.1, depthAlpha * (0.3 + basePt.amp/300)));
                     ctx.stroke();
                 }
+
+                // 3. Vertikale Speichen zeichnen
+                ctx.beginPath();
+                for(let p = 0; p < pts; p += 2) { // Aus Performance-Gründen nur jede 2. Speiche
+                    for(let r = 0; r < rings; r++) {
+                        let pt = projectedPoints[r][p];
+                        if (pt.zPos < 50) { ctx.moveTo(pt.x, pt.y); continue; } 
+                        
+                        if (r === 0) ctx.moveTo(pt.x, pt.y);
+                        else ctx.lineTo(pt.x, pt.y);
+                    }
+                }
+                ctx.strokeStyle = accentColor;
+                ctx.globalAlpha = 0.25;
+                ctx.stroke();
                 
                 ctx.globalAlpha = 1.0;
                 ctx.globalCompositeOperation = 'source-over';
@@ -436,7 +453,6 @@
             shockwaves: [],
             onBeat: function(pow) {
                 this.shockwaves.push({ r: 50, a: 1.0, w: 15 });
-                if(pow > 240) flashOpacity = 0.5;
             },
             draw: function(ctx, bass, mids) {
                 ctx.translate(cx, cy);
@@ -475,12 +491,129 @@
             }
         };
 
+        // KOMPLETT NEU: LIQUID GLASS (Extrem komplexer Modus 5)
+        const LIQUID_API = {
+            particles: Array.from({length: 120}, () => ({
+                x: Math.random() * window.innerWidth,
+                y: Math.random() * window.innerHeight,
+                s: Math.random() * 2 + 1,
+                vx: (Math.random() - 0.5) * 1.5,
+                vy: (Math.random() - 0.5) * 1.5
+            })),
+            
+            // Generiert die organisch wabbelnde Form
+            drawBlob: function(ctx, xOff, yOff, color, time, bass, mids, isFill) {
+                let pts = 120;
+                ctx.beginPath();
+                let baseRadius = 150 + (bass * 0.4);
+                
+                for (let i = 0; i < pts; i++) {
+                    let a = (i / pts) * Math.PI * 2;
+                    let audioMod = (freqArray[i % 60] / 255) * (bass * 0.2); // Frequenz auf Ring mappen
+                    
+                    // Komplexe Perlin-Noise ähnliche Trigonometrie
+                    let n1 = Math.sin(a * 4 + time * 0.015) * (20 + mids * 0.4); // Vocals steuern Mitten-Wobble
+                    let n2 = Math.cos(a * 7 - time * 0.025) * (10 + bass * 0.1); // Bass erzeugt scharfe Kanten
+                    let n3 = Math.sin(a * 11 + time * 0.04) * (5 + audioMod);
+                    
+                    let r = baseRadius + n1 + n2 + n3;
+                    let px = Math.cos(a) * r + xOff;
+                    let py = Math.sin(a) * r + yOff;
+                    
+                    if(i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+                if(isFill) {
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                } else {
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            },
+            
+            draw: function(ctx, bass, mids, highs) {
+                // Hintergrund-Partikel animieren
+                for(let p of this.particles) {
+                    p.x += p.vx; p.y += p.vy;
+                    if(p.x < 0) p.x = cw; if(p.x > cw) p.x = 0;
+                    if(p.y < 0) p.y = ch; if(p.y > ch) p.y = 0;
+                }
+
+                let chromaticShift = 3 + (highs * 0.15) + (phase === 2 ? 15 : 0); // Trennt Farben bei Hi-Hats
+
+                ctx.translate(cx, cy);
+
+                // --- SCHRITT 1: LUPEN-EFFEKT (Hintergrund vergrößert im Tropfen) ---
+                ctx.save();
+                this.drawBlob(ctx, 0, 0, 'transparent', globalTime, bass, mids, false);
+                ctx.clip(); // Ab hier wird nur noch INNERHALB der Form gezeichnet
+
+                // Grid (Gitter) vergrößert zeichnen
+                ctx.scale(1.3 + (bass * 0.002), 1.3 + (bass * 0.002));
+                ctx.rotate(globalTime * 0.001);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = `rgba(255, 255, 255, 0.1)`;
+                let gridSpacing = 50;
+                ctx.beginPath();
+                for(let x = -cw; x <= cw; x += gridSpacing) { ctx.moveTo(x, -ch); ctx.lineTo(x, ch); }
+                for(let y = -ch; y <= ch; y += gridSpacing) { ctx.moveTo(-cw, y); ctx.lineTo(cw, y); }
+                ctx.stroke();
+
+                // Hintergrund-Partikel im Tropfen zeichnen (leuchtend)
+                ctx.fillStyle = accentColor;
+                for(let p of this.particles) {
+                    ctx.beginPath();
+                    ctx.arc(p.x - cx, p.y - cy, p.s * 3, 0, Math.PI * 2); // s*3 für Vergrößerung
+                    ctx.fill();
+                }
+                ctx.restore(); // Maske aufheben
+
+                // --- SCHRITT 2: CHROMATISCHE ABERRATION (RGB GLOW) ---
+                ctx.globalCompositeOperation = 'screen';
+
+                // Rot, Grün, Blau leicht versetzt übereinander legen. In der Mitte wird es Weiß.
+                this.drawBlob(ctx, -chromaticShift, 0, `rgba(255, 30, 30, 0.5)`, globalTime, bass, mids, true);
+                this.drawBlob(ctx, chromaticShift * 0.5, chromaticShift * 0.8, `rgba(30, 255, 30, 0.5)`, globalTime * 1.01, bass, mids, true);
+                this.drawBlob(ctx, chromaticShift * 0.5, -chromaticShift * 0.8, `rgba(30, 30, 255, 0.5)`, globalTime * 0.99, bass, mids, true);
+
+                ctx.globalCompositeOperation = 'source-over';
+
+                // --- SCHRITT 3: 3D GLAS SHADING ---
+                ctx.save();
+                this.drawBlob(ctx, 0, 0, 'transparent', globalTime, bass, mids, false);
+                ctx.clip(); // Nochmal Maske für das Shading
+
+                // Radialer Verlauf (Lichtreflexion oben links, Schatten unten rechts)
+                let grad = ctx.createRadialGradient(-70, -70, 20, 0, 0, 250);
+                grad.addColorStop(0, 'rgba(255, 255, 255, 0.9)'); // Harte weiße Reflexion
+                grad.addColorStop(0.3, 'rgba(255, 255, 255, 0.1)'); // Leichter Schimmer
+                grad.addColorStop(0.8, 'rgba(0, 0, 0, 0.5)'); // Tiefe im Glas
+                grad.addColorStop(1, 'rgba(0, 0, 0, 0.9)');   // Schwarzer Rand
+
+                ctx.fillStyle = grad;
+                ctx.fillRect(-cw, -ch, cw*2, ch*2);
+
+                ctx.restore();
+
+                // Harte weiße Konturlinie für den finalen "Glas"-Look
+                ctx.globalCompositeOperation = 'lighter';
+                this.drawBlob(ctx, 0, 0, 'rgba(255,255,255,0.6)', globalTime, bass, mids, false);
+
+                ctx.resetTransform();
+            }
+        };
+
         // === 5. MASTER RENDER PIPELINE ===
         function render() {
             requestAnimationFrame(render);
             globalTime++;
 
             let { bass, mids, highs, avgE } = processAudio();
+            
+            // Minimaler Fade-Effekt im Hintergrund
             ctx.fillStyle = `rgba(3, 3, 3, ${phase===2 ? 0.4 : 0.15})`;
             ctx.fillRect(0, 0, cw, ch);
 
@@ -493,8 +626,10 @@
             if(currentMode===2) RADAR_API.draw(ctx, bass, mids, avgE);
             if(currentMode===3) SPIRAL_API.draw(ctx, bass, mids);
             if(currentMode===4) VOID_API.draw(ctx, bass, mids);
+            if(currentMode===5) LIQUID_API.draw(ctx, bass, mids, highs);
 
-            if(flashOpacity > 0.01) { ctx.fillStyle = `rgba(${accentRgb}, ${flashOpacity})`; ctx.fillRect(0, 0, cw, ch); flashOpacity *= 0.85; }
+            // Flash-Effekt (Whiteout)
+            if(flashOpacity > 0.01) { ctx.fillStyle = `rgba(255, 255, 255, ${flashOpacity})`; ctx.fillRect(0, 0, cw, ch); flashOpacity *= 0.85; }
         }
         render();
     </script>

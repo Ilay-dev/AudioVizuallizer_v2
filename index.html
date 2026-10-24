@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AudioViz v2</title>
+    <title>AudioViz v3 - 3D Spiral</title>
     <style>
         :root {
             --bg-color: #030303;
@@ -131,14 +131,16 @@
         let isPlaying = false;
         let globalTime = 0;
         
-        let currentMode = 0; // 0 to 4
-        const MODE_NAMES = ["0. VORTEX CORE", "1. CYBER TRENCH", "2. NEURAL RADAR", "3. PLASMA SYMBIOTE", "4. VOID ECLIPSE"];
+        let currentMode = 3; // Starte direkt im neuen Modus zum Testen
+        const MODE_NAMES = ["0. VORTEX CORE", "1. CYBER TRENCH", "2. NEURAL RADAR", "3. 3D CYBER SPIRAL", "4. VOID ECLIPSE"];
         
         let energyHistory = new Float32Array(100), historyIndex = 0;
         let phase = 0, beatCutoff = 0, beatCooldown = 0, flashOpacity = 0;
         let silenceTimer = 0, modeCooldown = 120;
 
-        // === 2. EVENT LISTENERS & UI ===
+        // UI SETUP
+        document.getElementById('vis-mode').innerText = MODE_NAMES[currentMode];
+
         document.querySelectorAll('.theme-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
@@ -169,7 +171,7 @@
                 analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
                 freqArray = new Uint8Array(analyser.frequencyBinCount);
                 waveArray = new Uint8Array(analyser.frequencyBinCount);
-                analyser.smoothingTimeConstant = 0.55; 
+                analyser.smoothingTimeConstant = 0.7; // Etwas weicher für flüssige 3D Animation
             }
         }
 
@@ -246,7 +248,7 @@
                 if (Math.random() > 0.92) { canvas.classList.add("canvas-invert"); setTimeout(() => canvas.classList.remove("canvas-invert"), 100); }
             }
             if(currentMode === 0) VORTEX_API.onBeat(pow);
-            if(currentMode === 3) PLASMA_API.onBeat(pow);
+            if(currentMode === 3) SPIRAL_API.onBeat(pow);
             if(currentMode === 4) VOID_API.onBeat(pow);
         }
 
@@ -331,48 +333,105 @@
             }
         };
 
-        // NEW MODE 3: PLASMA SYMBIOTE (Organic, fluid blob with jagged rawstyle edges)
-        const PLASMA_API = {
-            rot: 0, shock: 0,
-            onBeat: function(pow) { this.shock = pow / 255; },
-            drawBlob: function(ctx, baseRad, color, isFill, speedMult, bass) {
-                ctx.beginPath();
-                let steps = 120;
-                for(let i=0; i<steps; i++) {
-                    let a = (i/steps)*Math.PI*2;
-                    let freqVal = freqArray[i % 40] / 255; 
-                    // Organic writhing
-                    let writhe = Math.sin((globalTime*0.05*speedMult) + i) * 15;
-                    // Sharp spikes on Screech/Mids (harder when bass is hitting)
-                    let spikes = freqVal * (30 + (this.shock*150));
-                    let r = baseRad + writhe + spikes;
-                    let vx = Math.cos(a)*r, vy = Math.sin(a)*r;
-                    i===0 ? ctx.moveTo(vx,vy) : ctx.lineTo(vx,vy);
-                }
-                ctx.closePath();
-                if(isFill) { ctx.fillStyle = color; ctx.fill(); }
-                else { ctx.strokeStyle = color; ctx.lineWidth=4; ctx.stroke(); }
+        // NEW MODE 3: 3D CYBER SPIRAL (Replaces the "Hair/Symbiote" Mode)
+        // Erzeugt ein 3D Wireframe Terrain, gerollt zu einem Strudel, genau wie auf dem Bild.
+        const SPIRAL_API = {
+            rot: 0, beatJump: 0,
+            onBeat: function(pow) {
+                this.beatJump = pow * 0.5; // Pusht den Trichter nach vorne bei einem Beat
             },
             draw: function(ctx, bass, mids) {
-                ctx.translate(cx, cy); this.rot += 0.005; ctx.rotate(this.rot);
-                this.shock *= 0.85; // smooth decay
+                ctx.translate(cx, cy + 100); // Etwas nach unten schieben wegen 3D-Winkel
                 
-                let scale = 1 + (bass/500); ctx.scale(scale, scale);
+                this.rot += phase === 2 ? 0.015 : 0.005;
+                this.beatJump *= 0.85; // Weiches Abklingen des Beat-Jumps
+                
+                let rings = 35; // Anzahl der Tiefenringe
+                let pts = 60;   // Punkte pro Ring (für das Netz)
+                let maxRadius = Math.max(cw, ch) * 0.75;
+                
+                // Kamera-Winkel (Tilt für den 3D-Look)
+                let tilt = 1.15; // Radians (kippt die Ebene nach hinten)
+                let cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+                
+                let projectedPoints = [];
 
-                // Layer 1 (Dark core)
-                this.drawBlob(ctx, 120, '#050505', true, 0.8, bass);
-                // Layer 2 (Colored neon)
-                this.drawBlob(ctx, 120, accentColor, false, 1.0, bass);
-                // Layer 3 (Inner white energy)
-                this.drawBlob(ctx, 80 + this.shock*40, '#ffffff', true, -1.2, bass);
-                // Layer 4 (Chaotic inner red lines)
-                this.drawBlob(ctx, 60, accentColor, false, 2.5, bass);
+                // 1. Koordinaten im 3D Raum berechnen
+                for(let r = 0; r < rings; r++) {
+                    let ringProj = [];
+                    // Logarithmisches Mapping der Frequenzen (Innere Ringe = Vocals/Highs, Äußere = Bass)
+                    // So formt die Stimme weiche Hügel und der Bass harte Spitzen
+                    let freqIdx = Math.floor(Math.pow((rings - r) / rings, 1.5) * 80); 
+                    let amp = freqArray[freqIdx] || 0;
+                    
+                    // Radius wird nach innen hin exponentiell kleiner (Strudeleffekt)
+                    let radiusNorm = Math.pow((r + 1) / rings, 1.2);
+                    let radius = radiusNorm * maxRadius;
+                    
+                    // Z-Tiefe (Der Trichter geht nach hinten in den Bildschirm)
+                    let baseZ = (1 - radiusNorm) * -800; 
 
+                    for(let p = 0; p < pts; p++) {
+                        let a = (p / pts) * Math.PI * 2 + this.rot + (r * 0.1); // Leichter Twist pro Ring
+                        
+                        // Terrain generieren (Kombination aus Frequenz und weicher Sinuswelle für Vocals)
+                        let vocalWave = Math.sin(p * 0.5 + globalTime * 0.03) * (mids * 0.5);
+                        let heightZ = (amp * 0.8) + vocalWave;
+                        
+                        let x = Math.cos(a) * radius;
+                        let y = Math.sin(a) * radius;
+                        let z = baseZ + heightZ + this.beatJump;
+                        
+                        // 3D Rotation um die X-Achse anwenden (Kippen)
+                        let ty = y * cosT - z * sinT;
+                        let tz = y * sinT + z * cosT;
+                        
+                        // Perspektivische Projektion (FOV)
+                        let perspective = 800;
+                        let scale = perspective / (perspective + tz + 400); // 400 = Kameraabstand
+                        
+                        ringProj.push({ 
+                            x: x * scale, 
+                            y: ty * scale, 
+                            amp: amp,
+                            scale: scale 
+                        });
+                    }
+                    projectedPoints.push(ringProj);
+                }
+                
+                // 2. Wireframe-Netz zeichnen (Verbindungen zwischen Ringen und Punkten)
+                ctx.globalCompositeOperation = 'lighter'; // Für den leuchtenden Neon-Effekt
+                ctx.lineWidth = 1.2;
+
+                for(let r = 0; r < rings - 1; r++) {
+                    ctx.beginPath();
+                    for(let p = 0; p < pts; p++) {
+                        let p1 = projectedPoints[r][p];
+                        let p2 = projectedPoints[r][(p + 1) % pts];
+                        let p3 = projectedPoints[r + 1][p];
+                        
+                        // Farbe und Transparenz basierend auf Frequenz und Tiefe
+                        let depthAlpha = (r / rings); // Hinten dunkel, vorne hell
+                        let energyColor = p1.amp > 150 ? '#ffffff' : accentColor;
+                        
+                        ctx.strokeStyle = energyColor;
+                        ctx.globalAlpha = Math.max(0.1, depthAlpha * (0.3 + p1.amp/255));
+                        
+                        // Dreieck für das Netz zeichnen
+                        ctx.moveTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.lineTo(p3.x, p3.y);
+                    }
+                    ctx.stroke();
+                }
+                
+                ctx.globalAlpha = 1.0;
+                ctx.globalCompositeOperation = 'source-over';
                 ctx.resetTransform();
             }
         };
 
-        // NEW MODE 4: VOID ECLIPSE (Black hole with outward fiery rays & expanding shockwaves)
         const VOID_API = {
             shockwaves: [],
             onBeat: function(pow) {
@@ -381,8 +440,6 @@
             },
             draw: function(ctx, bass, mids) {
                 ctx.translate(cx, cy);
-                
-                // Shockwaves
                 for(let i=this.shockwaves.length-1; i>=0; i--) {
                     let s = this.shockwaves[i];
                     s.r += phase===2 ? 40 : 15; s.a *= 0.92; s.w *= 0.95;
@@ -390,47 +447,30 @@
                     ctx.strokeStyle = `rgba(${accentRgb}, ${s.a})`; ctx.lineWidth = s.w; ctx.stroke();
                     if(s.a < 0.02) this.shockwaves.splice(i, 1);
                 }
-
-                // Solar Flares (Curving rays based on audio)
                 let numRays = 180;
-                let holeRadius = 150 + (bass * 0.3); // Core expanding with sub
-
+                let holeRadius = 150 + (bass * 0.3);
                 ctx.globalCompositeOperation = 'lighter';
                 for(let i=0; i<numRays; i++) {
-                    let freqVal = freqArray[Math.floor(i * 1.5)] || 0; // high freq binding
-                    if (freqVal < 20) continue; // Noise floor
-                    
+                    let freqVal = freqArray[Math.floor(i * 1.5)] || 0; 
+                    if (freqVal < 20) continue;
                     let a = (i/numRays) * Math.PI*2;
                     let len = (freqVal * 1.5) + (phase===2 ? 100 : 0);
-                    
-                    // Bezier bending logic for twisting flares
                     let cpOffset = Math.sin(globalTime*0.02 + i) * 100;
-                    
-                    let sx = Math.cos(a)*holeRadius; 
-                    let sy = Math.sin(a)*holeRadius;
-                    
+                    let sx = Math.cos(a)*holeRadius, sy = Math.sin(a)*holeRadius;
                     let cx1 = Math.cos(a + 0.5)*(holeRadius + len/2) + cpOffset;
                     let cy1 = Math.sin(a + 0.5)*(holeRadius + len/2) + cpOffset;
-                    
-                    let ex = Math.cos(a)* (holeRadius + len);
-                    let ey = Math.sin(a)* (holeRadius + len);
-
+                    let ex = Math.cos(a)* (holeRadius + len), ey = Math.sin(a)* (holeRadius + len);
                     ctx.beginPath(); ctx.moveTo(sx, sy);
                     ctx.quadraticCurveTo(cx1, cy1, ex, ey);
-                    
-                    // Color mix depending on frequency height
                     ctx.strokeStyle = freqVal > 200 ? '#ffffff' : accentColor;
                     ctx.lineWidth = freqVal > 220 ? 3 : 1;
                     ctx.globalAlpha = freqVal / 255;
                     ctx.stroke();
                 }
                 ctx.globalCompositeOperation = 'source-over';
-                
-                // Pure Black Void in center
                 ctx.beginPath(); ctx.arc(0,0, holeRadius - 2, 0, Math.PI*2);
                 ctx.fillStyle = '#020202'; ctx.fill();
                 ctx.lineWidth = 4; ctx.strokeStyle = accentColor; ctx.stroke();
-
                 ctx.resetTransform();
             }
         };
@@ -451,7 +491,7 @@
             if(currentMode===0) VORTEX_API.draw(ctx, bass, mids, avgE);
             if(currentMode===1) TRENCH_API.draw(ctx, bass, mids, avgE);
             if(currentMode===2) RADAR_API.draw(ctx, bass, mids, avgE);
-            if(currentMode===3) PLASMA_API.draw(ctx, bass, mids);
+            if(currentMode===3) SPIRAL_API.draw(ctx, bass, mids);
             if(currentMode===4) VOID_API.draw(ctx, bass, mids);
 
             if(flashOpacity > 0.01) { ctx.fillStyle = `rgba(${accentRgb}, ${flashOpacity})`; ctx.fillRect(0, 0, cw, ch); flashOpacity *= 0.85; }
